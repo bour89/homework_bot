@@ -6,6 +6,8 @@ import time
 import sys
 from dotenv import load_dotenv
 from http import HTTPStatus
+from settings import ENDPOINT, HOMEWORK_STATUSES, RETRY_TIME
+from telegram.error import TelegramError
 
 
 load_dotenv()
@@ -15,24 +17,16 @@ PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-RETRY_TIME = 600
-ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
-
-
-HOMEWORK_STATUSES = {
-    'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
-    'reviewing': 'Работа взята на проверку ревьюером.',
-    'rejected': 'Работа проверена: у ревьюера есть замечания.'
-}
 
 
 def send_message(bot, message):
     """Проверка отправки сообщения."""
+    logging.info('Попытка отправки сообщения')
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logging.info('Сообщение успешно отправлено')
-    except Exception as error:
+    except TelegramError as error:
         raise Exception('Не удалось отправить сообщение -'
                         f' возникла ошибка {error}')
 
@@ -41,9 +35,12 @@ def get_api_answer(current_timestamp):
     """Проверка получения ответа на запрос к эндпоинту."""
     timestamp = current_timestamp or int(time.time())
     params = {'from_date': timestamp}
-    homework_statuses = requests.get(url=ENDPOINT,
-                                     headers=HEADERS,
-                                     params=params)
+    try:
+        homework_statuses = requests.get(url=ENDPOINT,
+                                         headers=HEADERS,
+                                         params=params)
+    except Exception as error:
+        raise Exception(f'Ошибка при запросе к API: {error}.')
     if homework_statuses.status_code != HTTPStatus.OK:
         raise Exception('Эндпоинт не доступен')
     else:
@@ -98,13 +95,16 @@ def main():
     current_timestamp = 15 * 24 * 60 * 60
     if not check_tokens():
         logger.critical('Отстутвие переменной в окружении')
+    status_temp = ''
     while True:
         try:
             response = get_api_answer(current_timestamp)
             homeworks = check_response(response)
             for homework in homeworks:
                 status = parse_status(homework)
-            send_message(bot, status)
+            if status_temp != status:
+                status_temp = status
+                send_message(bot, status)
             current_timestamp = int(time.time())
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
